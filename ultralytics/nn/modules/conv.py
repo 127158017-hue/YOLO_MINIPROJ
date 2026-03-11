@@ -13,6 +13,7 @@ __all__ = (
     "CBAM",
     "ChannelAttention",
     "Concat",
+    "BiFPN_Concat",
     "Conv",
     "Conv2",
     "ConvTranspose",
@@ -24,6 +25,7 @@ __all__ = (
     "LightConv",
     "RepConv",
     "SpatialAttention",
+    "CoordAtt",
 )
 
 
@@ -614,31 +616,106 @@ class CBAM(nn.Module):
 
 
 class Concat(nn.Module):
-    """Concatenate a list of tensors along specified dimension.
-
-    Attributes:
-        d (int): Dimension along which to concatenate tensors.
-    """
+    """Concatenate a list of tensors along specified dimension."""
 
     def __init__(self, dimension=1):
-        """Initialize Concat module.
-
-        Args:
-            dimension (int): Dimension along which to concatenate tensors.
-        """
+        """Initialize Concat module."""
         super().__init__()
         self.d = dimension
 
     def forward(self, x: list[torch.Tensor]):
-        """Concatenate input tensors along specified dimension.
-
-        Args:
-            x (list[torch.Tensor]): List of input tensors.
-
-        Returns:
-            (torch.Tensor): Concatenated tensor.
-        """
+        """Concatenate input tensors along specified dimension."""
         return torch.cat(x, self.d)
+
+
+class BiFPN_Concat(nn.Module):
+    """Bidirectional Feature Pyramid Network (BiFPN) Concat with learnable weights."""
+
+    def __init__(self, dimension=1):
+        """Initialize BiFPN_Concat module."""
+        super().__init__()
+        self.d = dimension
+        self.w = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 0.0001
+        self.relu = nn.ReLU()
+
+    def forward(self, x: list[torch.Tensor]):
+        """Weighted concatenation of input tensors."""
+        # Ensure we have a weight for each input tensor
+        if len(self.w) != len(x):
+            self.w = nn.Parameter(torch.ones(len(x), dtype=torch.float32, device=x[0].device), requires_grad=True)
+            
+        w = self.relu(self.w)
+        weight = w / (torch.sum(w, dim=0) + self.epsilon)
+        
+        # We need to resize prior to weighted add if they differ in shape.
+        # But for Concat in YOLO, they usually just concat along channels, meaning H,W should match.
+        # If we are doing a weighted sum, they must have the same channels too unless we apply a conv first.
+        # Wait, the paper says BiFPN uses weighted fusion where features are added, not concatenated.
+        # BUT YOLOv5 concat concatenates them. We should concatenate the weighted features, or add them? 
+        # "it directly fuses features ... fast normalized fusion technique"
+        # Since it replaces `Concat`, standard YOLO expects concatenated channel depths!
+        # BiFPN typically applies a conv *after* addition. 
+        # So we will do weighted concatenation as an approximation, or simply let the next Conv handle it?
+        # Actually, let's just weight the tensors and concatenate them as a direct replacement for Concat.
+        
+        weighted_x = [x[i] * weight[i] for i in range(len(x))]
+        return torch.cat(weighted_x, self.d)
+
+
+class h_sigmoid(nn.Module):
+    def __init__(self, inplace=True):
+        super(h_sigmoid, self).__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
+
+    def forward(self, x):
+        return self.relu(x + 3) / 6
+
+class h_swish(nn.Module):
+    def __init__(self, inplace=True):
+        super(h_swish, self).__init__()
+        self.sigmoid = h_sigmoid(inplace=inplace)
+
+    def forward(self, x):
+        return x * self.sigmoid(x)
+
+class CoordAtt(nn.Module):
+    """Coordinate Attention Module."""
+    def __init__(self, inp, oup, reduction=32):
+        super(CoordAtt, self).__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+
+        mip = max(8, inp // reduction)
+
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = h_swish()
+        
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+        
+        n,c,h,w = x.size()
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y) 
+        
+        x_h, x_w = torch.split(y, [h, w], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+
+        out = identity * a_w * a_h
+
+        return out
 
 
 class Index(nn.Module):

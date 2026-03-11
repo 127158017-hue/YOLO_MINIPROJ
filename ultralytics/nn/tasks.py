@@ -35,12 +35,15 @@ from ultralytics.nn.modules import (
     C2fCIB,
     C2fPSA,
     C3Ghost,
+    C3GhostCA,
     C3k2,
     C3x,
     CBFuse,
     CBLinear,
     Classify,
     Concat,
+    BiFPN_Concat,
+    CoordAtt,
     Conv,
     Conv2,
     ConvTranspose,
@@ -1600,6 +1603,7 @@ def parse_model(d, ch, verbose=True):
             C3,
             C3TR,
             C3Ghost,
+            C3GhostCA,
             torch.nn.ConvTranspose2d,
             DWConvTranspose2d,
             C3x,
@@ -1608,6 +1612,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             C2fCIB,
             A2C2f,
+            CoordAtt,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1621,6 +1626,7 @@ def parse_model(d, ch, verbose=True):
             C3,
             C3TR,
             C3Ghost,
+            C3GhostCA,
             C3x,
             RepC3,
             C2fPSA,
@@ -1676,8 +1682,11 @@ def parse_model(d, ch, verbose=True):
             c2 = args[1] if args[3] else args[1] * 4
         elif m is torch.nn.BatchNorm2d:
             args = [ch[f]]
-        elif m is Concat:
+        elif m in {Concat, BiFPN_Concat}:
             c2 = sum(ch[x] for x in f)
+        elif m is CoordAtt:
+            c2 = ch[f]
+            args = [c2, *args]
         elif m in frozenset(
             {
                 Detect,

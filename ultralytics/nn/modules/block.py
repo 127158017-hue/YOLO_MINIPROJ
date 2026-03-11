@@ -36,12 +36,14 @@ __all__ = (
     "C2fCIB",
     "C2fPSA",
     "C3Ghost",
+    "C3GhostCA",
     "C3k2",
     "C3x",
     "CBFuse",
     "CBLinear",
     "ContrastiveHead",
     "GhostBottleneck",
+    "GhostBottleneckCA",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
@@ -452,6 +454,56 @@ class GhostBottleneck(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply skip connection and addition to input tensor."""
         return self.conv(x) + self.shortcut(x)
+
+
+class GhostBottleneckCA(nn.Module):
+    """Ghost Bottleneck with Coordinate Attention."""
+
+    def __init__(self, c1: int, c2: int, k: int = 3, s: int = 1):
+        """Initialize Ghost Bottleneck CA module.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k (int): Kernel size.
+            s (int): Stride.
+        """
+        super().__init__()
+        from ultralytics.nn.modules.conv import CoordAtt
+
+        c_ = c2 // 2
+        self.conv = nn.Sequential(
+            GhostConv(c1, c_, 1, 1),  # pw
+            DWConv(c_, c_, k, s, act=False) if s == 2 else nn.Identity(),  # dw
+            GhostConv(c_, c2, 1, 1, act=False),  # pw-linear
+            CoordAtt(c2, c2)  # CA mechanism integrated here
+        )
+        self.shortcut = (
+            nn.Sequential(DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)) if s == 2 else nn.Identity()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply skip connection and addition to input tensor."""
+        return self.conv(x) + self.shortcut(x)
+
+
+class C3GhostCA(C3):
+    """C3 module with GhostBottleneckCA()."""
+
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = True, g: int = 1, e: float = 0.5):
+        """Initialize C3 module with GhostBottleneck CA.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            n (int): Number of Ghost bottleneck blocks.
+            shortcut (bool): Whether to use shortcut connections.
+            g (int): Groups for convolutions.
+            e (float): Expansion ratio.
+        """
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)  # hidden channels
+        self.m = nn.Sequential(*(GhostBottleneckCA(c_, c_) for _ in range(n)))
 
 
 class Bottleneck(nn.Module):
