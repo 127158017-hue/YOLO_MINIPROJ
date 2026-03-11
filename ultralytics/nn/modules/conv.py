@@ -642,10 +642,14 @@ class BiFPN_Concat(nn.Module):
     def forward(self, x: list[torch.Tensor]):
         """Weighted concatenation of input tensors."""
         # Ensure we have a weight for each input tensor
-        if len(self.w) != len(x):
-            self.w = nn.Parameter(torch.ones(len(x), dtype=torch.float32, device=x[0].device), requires_grad=True)
-            
-        w = self.relu(self.w)
+        if self.w.shape[0] != len(x):
+            # We must recreate the parameter, but we shouldn't do this during every forward pass.
+            # However this indicates the layers change dimensions, so we resize here without requires_grad inside forward
+            w_new = torch.ones(len(x), dtype=torch.float32, device=x[0].device)
+            # Cannot re-assign self.w during forward pass safely without breaking grad graph!
+            w = torch.nn.functional.relu(w_new)
+        else:
+            w = torch.nn.functional.relu(self.w)
         weight = w / (torch.sum(w, dim=0) + self.epsilon)
         
         # We need to resize prior to weighted add if they differ in shape.
@@ -664,7 +668,7 @@ class BiFPN_Concat(nn.Module):
 
 
 class h_sigmoid(nn.Module):
-    def __init__(self, inplace=True):
+    def __init__(self, inplace=False):
         super(h_sigmoid, self).__init__()
         self.relu = nn.ReLU6(inplace=inplace)
 
@@ -672,7 +676,7 @@ class h_sigmoid(nn.Module):
         return self.relu(x + 3) / 6
 
 class h_swish(nn.Module):
-    def __init__(self, inplace=True):
+    def __init__(self, inplace=False):
         super(h_swish, self).__init__()
         self.sigmoid = h_sigmoid(inplace=inplace)
 
@@ -703,17 +707,18 @@ class CoordAtt(nn.Module):
         x_w = self.pool_w(x).permute(0, 1, 3, 2)
 
         y = torch.cat([x_h, x_w], dim=2)
-        y = self.conv1(y)
-        y = self.bn1(y)
-        y = self.act(y) 
+        y1 = self.conv1(y)
+        y2 = self.bn1(y1)
+        y3 = self.act(y2) 
         
-        x_h, x_w = torch.split(y, [h, w], dim=2)
-        x_w = x_w.permute(0, 1, 3, 2)
+        x_h_out, x_w_out = torch.split(y3, [h, w], dim=2)
+        x_w_out = x_w_out.permute(0, 1, 3, 2)
 
-        a_h = self.conv_h(x_h).sigmoid()
-        a_w = self.conv_w(x_w).sigmoid()
+        a_h = self.conv_h(x_h_out).sigmoid()
+        a_w = self.conv_w(x_w_out).sigmoid()
 
-        out = identity * a_w * a_h
+        # out = identity * a_w * a_h
+        out = identity.clone() * a_w * a_h
 
         return out
 
