@@ -11,12 +11,13 @@ import torch.nn as nn
 
 __all__ = (
     "CBAM",
+    "BiFPN_Concat",
     "ChannelAttention",
     "Concat",
-    "BiFPN_Concat",
     "Conv",
     "Conv2",
     "ConvTranspose",
+    "CoordAtt",
     "DWConv",
     "DWConvTranspose2d",
     "Focus",
@@ -25,7 +26,6 @@ __all__ = (
     "LightConv",
     "RepConv",
     "SpatialAttention",
-    "CoordAtt",
 )
 
 
@@ -651,42 +651,45 @@ class BiFPN_Concat(nn.Module):
         else:
             w = torch.nn.functional.relu(self.w)
         weight = w / (torch.sum(w, dim=0) + self.epsilon)
-        
+
         # We need to resize prior to weighted add if they differ in shape.
         # But for Concat in YOLO, they usually just concat along channels, meaning H,W should match.
         # If we are doing a weighted sum, they must have the same channels too unless we apply a conv first.
         # Wait, the paper says BiFPN uses weighted fusion where features are added, not concatenated.
-        # BUT YOLOv5 concat concatenates them. We should concatenate the weighted features, or add them? 
+        # BUT YOLOv5 concat concatenates them. We should concatenate the weighted features, or add them?
         # "it directly fuses features ... fast normalized fusion technique"
         # Since it replaces `Concat`, standard YOLO expects concatenated channel depths!
-        # BiFPN typically applies a conv *after* addition. 
+        # BiFPN typically applies a conv *after* addition.
         # So we will do weighted concatenation as an approximation, or simply let the next Conv handle it?
         # Actually, let's just weight the tensors and concatenate them as a direct replacement for Concat.
-        
+
         weighted_x = [x[i] * weight[i] for i in range(len(x))]
         return torch.cat(weighted_x, self.d)
 
 
 class h_sigmoid(nn.Module):
     def __init__(self, inplace=False):
-        super(h_sigmoid, self).__init__()
+        super().__init__()
         self.relu = nn.ReLU6(inplace=inplace)
 
     def forward(self, x):
         return self.relu(x + 3) / 6
 
+
 class h_swish(nn.Module):
     def __init__(self, inplace=False):
-        super(h_swish, self).__init__()
+        super().__init__()
         self.sigmoid = h_sigmoid(inplace=inplace)
 
     def forward(self, x):
         return x * self.sigmoid(x)
 
+
 class CoordAtt(nn.Module):
     """Coordinate Attention Module."""
+
     def __init__(self, inp, oup, reduction=32):
-        super(CoordAtt, self).__init__()
+        super().__init__()
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
 
@@ -695,22 +698,22 @@ class CoordAtt(nn.Module):
         self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
         self.bn1 = nn.BatchNorm2d(mip)
         self.act = h_swish()
-        
+
         self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
         self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
 
     def forward(self, x):
         identity = x
-        
-        n,c,h,w = x.size()
+
+        _n, _c, h, w = x.size()
         x_h = self.pool_h(x)
         x_w = self.pool_w(x).permute(0, 1, 3, 2)
 
         y = torch.cat([x_h, x_w], dim=2)
         y1 = self.conv1(y)
         y2 = self.bn1(y1)
-        y3 = self.act(y2) 
-        
+        y3 = self.act(y2)
+
         x_h_out, x_w_out = torch.split(y3, [h, w], dim=2)
         x_w_out = x_w_out.permute(0, 1, 3, 2)
 
