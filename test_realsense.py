@@ -7,11 +7,11 @@ try:
     print("Connecting to camera...")
     pipeline.start()
     print("Success! Camera is detected and streaming.")
-    
+
     # Get 1 frame to confirm
     frames = pipeline.wait_for_frames()
     print("Frame received!")
-    
+
     pipeline.stop()
 except Exception as e:
     print(f"Internal Error: {e}")
