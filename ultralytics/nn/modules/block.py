@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
@@ -476,7 +476,7 @@ class GhostBottleneckCA(nn.Module):
             GhostConv(c1, c_, 1, 1),  # pw
             DWConv(c_, c_, k, s, act=False) if s == 2 else nn.Identity(),  # dw
             GhostConv(c_, c2, 1, 1, act=False),  # pw-linear
-            CoordAtt(c2, c2)  # CA mechanism integrated here
+            CoordAtt(c2, c2),  # CA mechanism integrated here
         )
         self.shortcut = (
             nn.Sequential(DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)) if s == 2 else nn.Identity()
