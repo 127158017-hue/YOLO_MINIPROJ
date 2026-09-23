@@ -1,18 +1,20 @@
 # Detailed Implementation Execution: GhostNet, CA, and BiFPN
 
-This document provides a highly technical, execution-level breakdown of the three core architectural improvements made to the YOLOv5 model. It explains *how* the targets are executed, the mathematical intuition behind them, and exactly what happens to the tensors as they flow through these new modules.
+This document provides a highly technical, execution-level breakdown of the three core architectural improvements made to the YOLOv5 model. It explains _how_ the targets are executed, the mathematical intuition behind them, and exactly what happens to the tensors as they flow through these new modules.
 
 ---
 
 ## 1. GhostNet Backbone Integration (`GhostConv` & `GhostBottleneckCA`)
 
 ### The Execution Target
-Standard convolutional networks (like the original YOLOv5 `Conv` and Bottlenecks) generate many feature maps that are essentially "ghosts" or slight variations of each other. The target of GhostNet is to eliminate this extreme redundancy. Instead of recalculating every feature map from scratch using heavy convolutions, GhostNet calculates a *few* intrinsic feature maps, and then generates the rest using cheap, linear operations.
+
+Standard convolutional networks (like the original YOLOv5 `Conv` and Bottlenecks) generate many feature maps that are essentially "ghosts" or slight variations of each other. The target of GhostNet is to eliminate this extreme redundancy. Instead of recalculating every feature map from scratch using heavy convolutions, GhostNet calculates a _few_ intrinsic feature maps, and then generates the rest using cheap, linear operations.
 
 ### How it is Executed
-1. **Primary Convolution (The Intrinsic Maps):** 
-   When a tensor $X \in \mathbb{R}^{C \times H \times W}$ enters a `GhostConv`, we first perform a standard 2D convolution, but we only generate *half* (or a fraction) of the desired output channels. This requires significantly fewer parameters.
-   - $Y' = X * W_{primary}$ 
+
+1. **Primary Convolution (The Intrinsic Maps):**
+   When a tensor $X \in \mathbb{R}^{C \times H \times W}$ enters a `GhostConv`, we first perform a standard 2D convolution, but we only generate _half_ (or a fraction) of the desired output channels. This requires significantly fewer parameters.
+   - $Y' = X * W_{primary}$
    - (Where $Y'$ contains the intrinsic maps).
 
 2. **Cheap Operations (The "Ghosts"):**
@@ -30,16 +32,18 @@ Standard convolutional networks (like the original YOLOv5 `Conv` and Bottlenecks
 ## 2. Coordinate Attention Mechanism (`CoordAtt`)
 
 ### The Execution Target
-Standard channel attention (like SE Networks) squeezes spatial dimensions (Height and Width) into a single value to learn channel importance. This destroys positional information, which is critical in YOLO for detecting *where* an object is. The target of Coordinate Attention (CA) is to encode both channel relationships *and* precise positional information.
+
+Standard channel attention (like SE Networks) squeezes spatial dimensions (Height and Width) into a single value to learn channel importance. This destroys positional information, which is critical in YOLO for detecting _where_ an object is. The target of Coordinate Attention (CA) is to encode both channel relationships _and_ precise positional information.
 
 ### How it is Executed
+
 When a tensor $X \in \mathbb{R}^{C \times H \times W}$ enters the `CoordAtt` module:
 
 1. **Coordinate Information Embedding (Directional Pooling):**
-   Instead of global average pooling (which turns $H \times W$ into $1 \times 1$), CA uses two 1D average pooling operations. 
+   Instead of global average pooling (which turns $H \times W$ into $1 \times 1$), CA uses two 1D average pooling operations.
    - One pool sweeps across the width, generating a tensor of shape $C \times H \times 1$.
    - The other pool sweeps across the height, generating a tensor of shape $C \times 1 \times W$.
-   This effectively summarizes positional information along both the X and Y axes independently.
+     This effectively summarizes positional information along both the X and Y axes independently.
 
 2. **Concatenation and Shared Transformation:**
    The $X$ and $Y$ direction tensors are concatenated and passed through a shared $1 \times 1$ convolution, Batch Normalization, and a nonlinear `h_swish` activation. This step forces the module to learn the cross-channel relationships relative to their spatial positions.
@@ -53,7 +57,7 @@ When a tensor $X \in \mathbb{R}^{C \times H \times W}$ enters the `CoordAtt` mod
 4. **Applying the Attention (The Multiplication):**
    The final execution step maps these attention weights back onto the original input tensor. We take the identity tensor $X$ and perform element-wise multiplication with both the horizontal weights $a^h$ and vertical weights $a^w$.
    - $Output = X * a^h * a^w$
-   - *Note on implementation:* PyTorch requires $X$ to be cloned (`X.clone()`) before this multiplication to prevent backpropagation graph errors from in-place modifications.
+   - _Note on implementation:_ PyTorch requires $X$ to be cloned (`X.clone()`) before this multiplication to prevent backpropagation graph errors from in-place modifications.
 
 5. **Where it lives:** We injected this `CoordAtt` module directly into the `GhostBottleneckCA`. As features pass through the GhostNet backbone, the Coordinate Attention layer consistently forces the network to focus on mathematically important spatial coordinates (like the edges of a leaf or the shape of an apple).
 
@@ -62,10 +66,12 @@ When a tensor $X \in \mathbb{R}^{C \times H \times W}$ enters the `CoordAtt` mod
 ## 3. Bidirectional Feature Pyramid Network (`BiFPN_Concat`)
 
 ### The Execution Target
-The YOLOv5 "Neck" networks are responsible for taking feature maps of different scales from the backbone (e.g., small features for large objects, large features for small objects) and fusing them together so the final detection head has a holistic view. 
+
+The YOLOv5 "Neck" networks are responsible for taking feature maps of different scales from the backbone (e.g., small features for large objects, large features for small objects) and fusing them together so the final detection head has a holistic view.
 Standard YOLOv5 uses a simple `Concat` layer, which assumes all incoming feature maps contribute equally. The target of BiFPN is to introduce **Weighted Feature Fusion**. It acknowledges that a feature map coming from the deep backbone might be more semantically important than a shallow feature map, and the network should learn to weigh them dynamically.
 
 ### How it is Executed
+
 Instead of standard memory concatenation:
 
 1. **Defining Learnable Weights:**
